@@ -260,23 +260,34 @@
     letter-spacing: 0.03em;
   }
 
-  .voice-btn {
+  .voice-btn,
+  .clear-btn {
     flex: 0 0 auto;
     min-height: 36px;
     padding: 6px 18px;
     font-family: inherit;
     font-size: 14px;
     font-weight: 600;
-    color: #284862;
-    background: #f4f8fd;
     border: 1.5px solid var(--line);
     border-radius: 999px;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, color 0.15s;
   }
 
+  .voice-btn {
+    color: #284862;
+    background: #f4f8fd;
+  }
+
+  .clear-btn {
+    color: #5c7488;
+    background: #fff;
+  }
+
   .voice-btn:hover:not(:disabled) { border-color: #8fb8e0; background: #eaf3fd; }
-  .voice-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .clear-btn:hover:not(:disabled) { border-color: #b9cbdc; background: #f7fafd; color: #2b4258; }
+  .voice-btn:disabled,
+  .clear-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .voice-btn.is-listening {
     color: #fff;
@@ -296,7 +307,8 @@
     animation: pulse 1s ease-in-out infinite;
   }
 
-  .voice-btn:focus-visible {
+  .voice-btn:focus-visible,
+  .clear-btn:focus-visible {
     outline: 3px solid #1c8cf0;
     outline-offset: 2px;
   }
@@ -441,6 +453,7 @@
         placeholder="Please enter here / ここに入力してください"></textarea>
       <div class="pane-foot">
         <button id="voice-source" class="voice-btn" type="button" aria-pressed="false">音声</button>
+        <button id="clear-source" class="clear-btn" type="button">クリア</button>
         <span>Ctrl + Enter でも翻訳できます</span>
       </div>
     </section>
@@ -462,6 +475,7 @@
         placeholder="翻訳結果がここに表示されます"></textarea>
       <div class="pane-foot">
         <button id="voice-result" class="voice-btn" type="button" aria-pressed="false">音声</button>
+        <button id="clear-result" class="clear-btn" type="button">クリア</button>
         <span>Ctrl + Enter でも翻訳できます</span>
       </div>
     </section>
@@ -622,6 +636,7 @@
 
     let listening = false;
     let baseText = "";
+    let discard = false;
 
     function setListening(value) {
       listening = value;
@@ -634,6 +649,20 @@
       stop() {
         if (listening) recognition.stop();
       },
+      clear() {
+        discard = true;
+        if (listening) {
+          try {
+            recognition.abort();
+          } catch (error) {
+            console.error(error);
+          }
+        }
+        setListening(false);
+        if (activeVoice === controller) activeVoice = null;
+        textarea.value = "";
+        textarea.focus();
+      },
       toggle() {
         if (listening) {
           recognition.stop();
@@ -642,6 +671,7 @@
 
         if (activeVoice && activeVoice !== controller) activeVoice.stop();
         activeVoice = controller;
+        discard = false;
         baseText = textarea.value.trim();
 
         const language = getLanguage();
@@ -661,6 +691,7 @@
     recognition.addEventListener("start", () => setListening(true));
 
     recognition.addEventListener("result", (event) => {
+      if (discard) return;
       let transcript = "";
       for (let index = 0; index < event.results.length; index += 1) {
         transcript += event.results[index][0].transcript;
@@ -1019,6 +1050,18 @@
     result,
     () => "ja-JP",
   );
+
+  function clearInput(voice, textarea) {
+    if (voice) {
+      voice.clear();
+      return;
+    }
+    textarea.value = "";
+    textarea.focus();
+  }
+
+  document.getElementById("clear-source").addEventListener("click", () => clearInput(sourceVoice, source));
+  document.getElementById("clear-result").addEventListener("click", () => clearInput(resultVoice, result));
 
   syncHeaderButtons();
   loadLanguages();
