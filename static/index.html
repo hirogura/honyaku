@@ -494,7 +494,7 @@
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.9.0</span>
+      <span class="version">v.0.9.1</span>
     </div>
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
     <div class="header-actions">
@@ -1175,6 +1175,40 @@
     return chunks.map((chunk) => chunk.trim()).filter(Boolean);
   }
 
+  // macOS の Fred / Albert や eSpeak など、同じ言語コードでも聞き取りにくい声が
+  // 端末には登録されている。最初に見つかった声をそのまま使うと掠れた声になるため、
+  // これらは避けて選ぶ。
+  const AVOID_VOICES = /(^|\s)(fred|albert|bahh|bells|boing|bubbles|cellos|deranged|jester|junior|organ|princess|ralph|superstar|trinoids|whisper|wobble|zarvox|good news|bad news|hysterical)(\s|$)|espeak/i;
+
+  function pickVoice(language) {
+    const normalized = (language || "").toLowerCase();
+    if (!normalized) return null;
+    const primary = normalized.split("-")[0];
+    const sameLanguage = (voice) => {
+      const lang = (voice.lang || "").toLowerCase();
+      return lang === normalized || lang.split("-")[0] === primary;
+    };
+
+    const voices = synthesizer.getVoices();
+    const candidates = voices.filter(
+      (voice) => sameLanguage(voice) && !AVOID_VOICES.test(voice.name || ""),
+    );
+    // 避ける声しか無い場合は、名前を指定せずブラウザ既定の声に任せる。
+    if (!candidates.length) return null;
+
+    // 同じ言語でも複数の声があるため、地域の一致 → 既定の声 → 高品質な声の順に優先する。
+    const score = (voice) => {
+      let value = 0;
+      if ((voice.lang || "").toLowerCase() === normalized) value += 100;
+      if (voice.default) value += 40;
+      if (/natural|neural|premium|enhanced|siri/i.test(voice.name || "")) value += 30;
+      if (/google|microsoft/i.test(voice.name || "")) value += 20;
+      return value;
+    };
+
+    return candidates.slice().sort((a, b) => score(b) - score(a))[0];
+  }
+
   // 読み上げボタンは、押すと有効になって内容を読み上げ、以降はその欄に翻訳結果が
   // 表示されたときに自動で読み上げる。もう一度押すと停止する。
   function createSpeaker(button, textarea, getLanguage) {
@@ -1189,16 +1223,6 @@
 
     function setSpeaking(value) {
       button.classList.toggle("is-speaking", value);
-    }
-
-    function pickVoice(language) {
-      const voices = synthesizer.getVoices();
-      const normalized = (language || "").toLowerCase();
-      return (
-        voices.find((voice) => (voice.lang || "").toLowerCase() === normalized) ||
-        voices.find((voice) => (voice.lang || "").toLowerCase().startsWith(normalized.split("-")[0])) ||
-        null
-      );
     }
 
     function stop() {
