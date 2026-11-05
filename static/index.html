@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b6bcb">
 <title>受付翻訳 | Reception Translation</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%230b6bcb'/%3E%3Ctext%20x='33'%20y='46'%20font-family='Helvetica,Arial,sans-serif'%20font-size='40'%20font-weight='700'%20text-anchor='middle'%20fill='%23ffffff'%3EJ%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #eef3f9;
@@ -21,6 +21,8 @@
   }
 
   * { box-sizing: border-box; }
+
+  .icon-sprite { display: none; }
 
   html, body { height: 100%; }
 
@@ -476,11 +478,23 @@
 </style>
 </head>
 <body>
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-speaker" viewBox="0 0 24 24">
+      <path d="M4 9h3.5L12 5v14L7.5 15H4z" fill="currentColor" />
+      <path
+        d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round" />
+    </symbol>
+  </svg>
+
   <header class="app-header">
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.8.0</span>
+      <span class="version">v.0.9.0</span>
     </div>
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
     <div class="header-actions">
@@ -507,6 +521,15 @@
         <button id="voice-source" class="voice-btn" type="button" aria-pressed="false">音声</button>
         <button id="clear-source" class="clear-btn" type="button">クリア</button>
         <span>Ctrl + Enter でも翻訳できます</span>
+        <button
+          id="speak-source"
+          class="speak-btn"
+          type="button"
+          aria-pressed="false"
+          title="この欄の内容を読み上げる">
+          <svg aria-hidden="true" focusable="false"><use href="#icon-speaker" /></svg>
+          <span>読み上げ</span>
+        </button>
       </div>
     </section>
 
@@ -534,16 +557,8 @@
           class="speak-btn"
           type="button"
           aria-pressed="false"
-          title="翻訳結果を自動で読み上げる">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M4 9h3.5L12 5v14L7.5 15H4z" fill="currentColor" />
-            <path
-              d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round" />
-          </svg>
+          title="この欄の内容を読み上げる">
+          <svg aria-hidden="true" focusable="false"><use href="#icon-speaker" /></svg>
           <span>読み上げ</span>
         </button>
       </div>
@@ -645,14 +660,14 @@
     }
 
     setTranslating(true, translateButton);
-    stopSpeaking();
+    stopReading();
     showNotice("翻訳しています…");
 
     try {
       result.value = await requestTranslation("/api/translate", text);
       hideNotice();
       result.focus();
-      if (speakEnabled) speak(result.value.trim());
+      if (resultSpeaker.isEnabled()) resultSpeaker.speak(result.value.trim());
     } catch (error) {
       console.error(error);
       showNotice(error.message || "通信エラーが発生しました。", "error");
@@ -683,6 +698,7 @@
       source.value = await requestTranslation("/api/translate/reverse", text);
       hideNotice();
       source.focus();
+      if (sourceSpeaker.isEnabled()) sourceSpeaker.speak(source.value.trim());
     } catch (error) {
       console.error(error);
       showNotice(error.message || "通信エラーが発生しました。", "error");
@@ -1122,20 +1138,12 @@
     () => "ja-JP",
   );
 
-  // ---------- 翻訳結果の読み上げ（Web Speech API） ----------
-  const speakButton = document.getElementById("speak-result");
+  // ---------- 読み上げ（Web Speech API） ----------
   const synthesizer = window.speechSynthesis;
-  let speakEnabled = false;
-  let speakToken = 0;
+  const speakers = [];
 
-  function pickJapaneseVoice() {
-    if (!synthesizer) return null;
-    const voices = synthesizer.getVoices();
-    return (
-      voices.find((voice) => voice.lang === "ja-JP") ||
-      voices.find((voice) => (voice.lang || "").toLowerCase().startsWith("ja")) ||
-      null
-    );
+  function stopReading() {
+    for (const speaker of speakers) speaker.stop();
   }
 
   // Chrome は 1 回の発話が長すぎると途中で切れるため、文単位でおよそ 180 文字に分割する。
@@ -1167,66 +1175,98 @@
     return chunks.map((chunk) => chunk.trim()).filter(Boolean);
   }
 
-  function setSpeaking(value) {
-    speakButton.classList.toggle("is-speaking", value);
-  }
+  // 読み上げボタンは、押すと有効になって内容を読み上げ、以降はその欄に翻訳結果が
+  // 表示されたときに自動で読み上げる。もう一度押すと停止する。
+  function createSpeaker(button, textarea, getLanguage) {
+    if (!synthesizer) {
+      button.disabled = true;
+      button.title = "このブラウザは読み上げに対応していません（Chrome / Safari をお使いください）";
+      return { speak() {}, stop() {}, isEnabled: () => false };
+    }
 
-  function stopSpeaking() {
-    speakToken += 1;
-    if (synthesizer) synthesizer.cancel();
-    setSpeaking(false);
-  }
+    let enabled = false;
+    let token = 0;
 
-  function speak(text) {
-    if (!synthesizer) return;
-    stopSpeaking();
+    function setSpeaking(value) {
+      button.classList.toggle("is-speaking", value);
+    }
 
-    const chunks = splitForSpeech(text);
-    if (!chunks.length) return;
+    function pickVoice(language) {
+      const voices = synthesizer.getVoices();
+      const normalized = (language || "").toLowerCase();
+      return (
+        voices.find((voice) => (voice.lang || "").toLowerCase() === normalized) ||
+        voices.find((voice) => (voice.lang || "").toLowerCase().startsWith(normalized.split("-")[0])) ||
+        null
+      );
+    }
 
-    const token = speakToken;
-    const voice = pickJapaneseVoice();
+    function stop() {
+      token += 1;
+      synthesizer.cancel();
+      setSpeaking(false);
+    }
 
-    // Chrome では cancel() の直後に speak() すると無視されることがあるため、次のタスクで開始する。
-    setTimeout(() => {
-      if (token !== speakToken) return;
+    function speak(text) {
+      stopReading();
 
-      chunks.forEach((chunk, index) => {
-        const utterance = new SpeechSynthesisUtterance(chunk);
-        utterance.lang = "ja-JP";
-        if (voice) utterance.voice = voice;
+      const chunks = splitForSpeech(text);
+      if (!chunks.length) return;
 
-        if (index === chunks.length - 1) {
-          const finish = () => {
-            if (token === speakToken) setSpeaking(false);
-          };
-          utterance.addEventListener("end", finish);
-          utterance.addEventListener("error", finish);
-        }
+      const language = getLanguage() || "ja-JP";
+      const voice = pickVoice(language);
+      const currentToken = token;
 
-        synthesizer.speak(utterance);
-      });
+      // Chrome では cancel() の直後に speak() すると無視されることがあるため、次のタスクで開始する。
+      setTimeout(() => {
+        if (currentToken !== token) return;
 
-      setSpeaking(true);
-    }, 0);
-  }
+        chunks.forEach((chunk, index) => {
+          const utterance = new SpeechSynthesisUtterance(chunk);
+          utterance.lang = language;
+          if (voice) utterance.voice = voice;
 
-  if (!synthesizer) {
-    speakButton.disabled = true;
-    speakButton.title = "このブラウザは読み上げに対応していません（Chrome / Safari をお使いください）";
-  } else {
-    speakButton.addEventListener("click", () => {
-      speakEnabled = !speakEnabled;
-      speakButton.setAttribute("aria-pressed", String(speakEnabled));
-      speakButton.classList.toggle("is-active", speakEnabled);
-      speakButton.title = speakEnabled
-        ? "翻訳結果を自動で読み上げます（もう一度押すと停止）"
-        : "翻訳結果を自動で読み上げる";
+          if (index === chunks.length - 1) {
+            const finish = () => {
+              if (currentToken === token) setSpeaking(false);
+            };
+            utterance.addEventListener("end", finish);
+            utterance.addEventListener("error", finish);
+          }
 
-      if (speakEnabled) speak(result.value.trim());
-      else stopSpeaking();
+          synthesizer.speak(utterance);
+        });
+
+        setSpeaking(true);
+      }, 0);
+    }
+
+    button.addEventListener("click", () => {
+      enabled = !enabled;
+      button.setAttribute("aria-pressed", String(enabled));
+      button.classList.toggle("is-active", enabled);
+      button.title = enabled
+        ? "この欄の内容を自動で読み上げます（もう一度押すと停止）"
+        : "この欄の内容を読み上げる";
+
+      if (enabled) speak(textarea.value.trim());
+      else stop();
     });
+
+    return { speak, stop, isEnabled: () => enabled };
   }
+
+  const sourceSpeaker = createSpeaker(
+    document.getElementById("speak-source"),
+    source,
+    () => SPEECH_LANGUAGES[selectedLanguage] || navigator.language || "",
+  );
+  const resultSpeaker = createSpeaker(
+    document.getElementById("speak-result"),
+    result,
+    () => "ja-JP",
+  );
+  speakers.push(sourceSpeaker, resultSpeaker);
 
   function clearInput(voice, textarea) {
     if (voice) {
@@ -1237,9 +1277,12 @@
     textarea.focus();
   }
 
-  document.getElementById("clear-source").addEventListener("click", () => clearInput(sourceVoice, source));
+  document.getElementById("clear-source").addEventListener("click", () => {
+    sourceSpeaker.stop();
+    clearInput(sourceVoice, source);
+  });
   document.getElementById("clear-result").addEventListener("click", () => {
-    stopSpeaking();
+    resultSpeaker.stop();
     clearInput(resultVoice, result);
   });
 
