@@ -362,10 +362,11 @@
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.2.0</span>
+      <span class="version">v.0.3.0</span>
     </div>
     <div class="header-actions">
       <button id="ollama" class="header-btn" type="button">Ollama</button>
+      <button id="model" class="header-btn" type="button">plamo-3-translate:2b</button>
       <button id="update" class="header-btn" type="button">アップデート</button>
       <button id="restart" class="header-btn" type="button">再起動</button>
     </div>
@@ -490,6 +491,7 @@
   }
 
   const ollamaButton = document.getElementById("ollama");
+  const modelButton = document.getElementById("model");
   const updateButton = document.getElementById("update");
   const restartButton = document.getElementById("restart");
   const notice = document.getElementById("notice");
@@ -497,6 +499,8 @@
   let maintenanceBusy = false;
   let installRunning = false;
   let ollamaInstalled = false;
+  let modelInstallRunning = false;
+  let modelInstalled = false;
 
   function showNotice(text, kind) {
     notice.textContent = text;
@@ -509,6 +513,14 @@
     restartButton.disabled = maintenanceBusy;
     ollamaButton.disabled = maintenanceBusy || installRunning || ollamaInstalled;
     ollamaButton.title = ollamaInstalled ? "Ollama はインストール済みです" : "";
+    modelButton.disabled = maintenanceBusy || modelInstallRunning || modelInstalled || !ollamaInstalled;
+    if (modelInstalled) {
+      modelButton.title = "インストール済みです";
+    } else if (!ollamaInstalled) {
+      modelButton.title = "先に Ollama をインストールしてください";
+    } else {
+      modelButton.title = "";
+    }
   }
 
   function setMaintenanceBusy(busy) {
@@ -675,7 +687,102 @@
     );
   }
 
+  async function refreshModelStatus() {
+    try {
+      const response = await fetch("/api/model", { cache: "no-store" });
+      if (!response.ok) return null;
+      const data = await response.json();
+      modelInstalled = Boolean(data.installed);
+      if (data.state === "installing") modelInstallRunning = true;
+      syncHeaderButtons();
+      return data;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function waitForModelInstall() {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      const data = await refreshModelStatus();
+      if (data && data.installed) return data;
+      if (data && data.state === "error") return data;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    return null;
+  }
+
+  async function runModelInstall() {
+    if (maintenanceBusy || modelInstallRunning || modelInstalled) return;
+    if (!ollamaInstalled) {
+      showNotice("先に Ollama をインストールしてください。", "error");
+      return;
+    }
+    if (!window.confirm("plamo-3-translate:2b をインストールします。約2GBのダウンロードが発生し、数分かかる場合があります。よろしいですか？")) return;
+
+    setMaintenanceBusy(true);
+    modelInstallRunning = true;
+    syncHeaderButtons();
+    showNotice("plamo-3-translate:2b をインストールしています…（数分かかる場合があります）");
+
+    try {
+      const response = await fetch("/api/model/install", { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error((data && data.detail) || "インストールを開始できませんでした。");
+      }
+    } catch (error) {
+      console.error(error);
+      modelInstallRunning = false;
+      setMaintenanceBusy(false);
+      showNotice(error.message || "インストールを開始できませんでした。", "error");
+      return;
+    }
+
+    const result = await waitForModelInstall();
+    modelInstallRunning = false;
+    setMaintenanceBusy(false);
+
+    if (result && result.installed) {
+      modelInstalled = true;
+      syncHeaderButtons();
+      showNotice("plamo-3-translate:2b のインストールが完了しました。", "success");
+      return;
+    }
+
+    showNotice(
+      (result && result.message) || "インストールの完了を確認できませんでした。ログを確認してください。",
+      "error",
+    );
+  }
+
+  async function initModel() {
+    const data = await refreshModelStatus();
+    if (!data || data.state !== "installing") return;
+
+    setMaintenanceBusy(true);
+    modelInstallRunning = true;
+    syncHeaderButtons();
+    showNotice("plamo-3-translate:2b をインストールしています…（数分かかる場合があります）");
+
+    const result = await waitForModelInstall();
+    modelInstallRunning = false;
+    setMaintenanceBusy(false);
+
+    if (result && result.installed) {
+      modelInstalled = true;
+      syncHeaderButtons();
+      showNotice("plamo-3-translate:2b のインストールが完了しました。", "success");
+      return;
+    }
+
+    showNotice(
+      (result && result.message) || "インストールの完了を確認できませんでした。ログを確認してください。",
+      "error",
+    );
+  }
+
   ollamaButton.addEventListener("click", runOllamaInstall);
+  modelButton.addEventListener("click", runModelInstall);
   updateButton.addEventListener("click", runUpdate);
   restartButton.addEventListener("click", runRestart);
 
@@ -692,6 +799,7 @@
   syncHeaderButtons();
   loadLanguages();
   initOllama();
+  initModel();
 </script>
 </body>
 </html>

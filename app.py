@@ -40,6 +40,12 @@ OLLAMA_SERVE_LOG = BASE_DIR / "logs" / "ollama.log"
 OLLAMA_INSTALL_STATE: dict[str, str] = {"state": "idle", "message": ""}
 _ollama_install_task: asyncio.Task | None = None
 
+MODEL_NAME = OLLAMA_MODEL
+MODEL_SOURCE = os.environ.get("OLLAMA_MODEL_SOURCE", "hf.co/pfnet/plamo-3-translate-2b-GGUF:Q4_K_M")
+MODEL_INSTALL_LOG = BASE_DIR / "logs" / "model-install.log"
+MODEL_INSTALL_STATE: dict[str, str] = {"state": "idle", "message": ""}
+_model_install_task: asyncio.Task | None = None
+
 # 受付でよく使われる言語。並び順がそのまま画面のボタン順になる。
 LANGUAGES = (
     {"code": "en", "label": "English", "html_lang": "en", "prompt_name": "英語"},
@@ -147,6 +153,54 @@ async def _ensure_ollama_service() -> None:
         if await ollama_responding():
             return
         await asyncio.sleep(1)
+
+
+async def installed_models() -> list[str]:
+    """Ollama に登録されているモデル名の一覧を返す。"""
+    try:
+        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=5.0) as client:
+            response = await client.get("/api/tags")
+        if response.status_code != 200:
+            return []
+        return [
+            model.get("name") or model.get("model", "")
+            for model in response.json().get("models", [])
+        ]
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return []
+
+
+async def model_installed() -> bool:
+    return MODEL_NAME in await installed_models()
+
+
+async def _run_model_install() -> None:
+    output = ""
+    try:
+        code, output = await _run_command(
+            ["ollama", "pull", MODEL_SOURCE], timeout=OLLAMA_INSTALL_TIMEOUT
+        )
+        _append_log(MODEL_INSTALL_LOG, f"$ ollama pull {MODEL_SOURCE}\n{output}")
+        if code != 0:
+            raise RuntimeError("モデルのダウンロードに失敗しました。")
+
+        if MODEL_SOURCE != MODEL_NAME:
+            code, copy_output = await _run_command(
+                ["ollama", "cp", MODEL_SOURCE, MODEL_NAME], timeout=120
+            )
+            _append_log(MODEL_INSTALL_LOG, f"$ ollama cp {MODEL_SOURCE} {MODEL_NAME}\n{copy_output}")
+            if code != 0:
+                raise RuntimeError("モデルの登録に失敗しました。")
+
+        if not await model_installed():
+            raise RuntimeError("インストール後にモデルが見つかりませんでした。")
+
+        MODEL_INSTALL_STATE.update(state="installed", message="モデルのインストールが完了しました。")
+    except Exception as exc:
+        detail = str(exc)
+        if output:
+            detail += "\n" + output[-1200:]
+        MODEL_INSTALL_STATE.update(state="error", message=detail)
 
 
 async def _run_ollama_install() -> None:
@@ -286,6 +340,36 @@ async def install_ollama() -> dict:
 
     OLLAMA_INSTALL_STATE.update(state="installing", message="インストールしています…")
     _ollama_install_task = asyncio.create_task(_run_ollama_install())
+    return {"ok": True, "state": "installing"}
+
+
+@app.get("/api/model")
+async def model_status() -> dict:
+    return {
+        "model": MODEL_NAME,
+        "installed": await model_installed(),
+        "state": MODEL_INSTALL_STATE["state"],
+        "message": MODEL_INSTALL_STATE["message"],
+    }
+
+
+@app.post("/api/model/install", status_code=202)
+async def install_model() -> dict:
+    """翻訳モデルを Ollama に導入する（非同期実行）。"""
+    global _model_install_task
+
+    if await model_installed():
+        MODEL_INSTALL_STATE.update(state="installed", message="モデルはインストール済みです。")
+        return {"ok": True, "state": "installed"}
+
+    if not ollama_installed():
+        raise HTTPException(status_code=409, detail="先に Ollama をインストールしてください。")
+
+    if _model_install_task is not None and not _model_install_task.done():
+        raise HTTPException(status_code=409, detail="モデルをインストール中です。しばらくお待ちください。")
+
+    MODEL_INSTALL_STATE.update(state="installing", message="インストールしています…")
+    _model_install_task = asyncio.create_task(_run_model_install())
     return {"ok": True, "state": "installing"}
 
 

@@ -9,7 +9,7 @@ OpenAI 互換 API 経由で利用し、ゲストの原文を日本語（です�
 - `static/index.html` — 受付用 UI（言語ボタン / 原文 / ➔ / 訳文）
 - `run.sh` — 起動スクリプト（`127.0.0.1:3374` 固定）
 
-現在のバージョン: `v.0.2.0`（画面右上に表示）
+現在のバージョン: `v.0.3.0`（画面右上に表示）
 
 ## セットアップ
 
@@ -17,11 +17,12 @@ OpenAI 互換 API 経由で利用し、ゲストの原文を日本語（です�
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-# Ollama 側でモデルを取得（名前は環境に合わせて変更）
-ollama pull plamo-3-translate:2b
+# モデルは Hugging Face の GGUF を取得して登録する
+ollama pull hf.co/pfnet/plamo-3-translate-2b-GGUF:Q4_K_M
+ollama cp hf.co/pfnet/plamo-3-translate-2b-GGUF:Q4_K_M plamo-3-translate:2b
 ```
 
-Ollama 本体は画面右上の「Ollama」ボタンからも導入できます（モデルの取得は別途必要）。
+Ollama 本体とモデルは、画面右上の「Ollama」「plamo-3-translate:2b」ボタンからも導入できます。
 
 ## 起動
 
@@ -35,6 +36,7 @@ Ollama 本体は画面右上の「Ollama」ボタンからも導入できます�
 | --- | --- | --- |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama の接続先 |
 | `OLLAMA_MODEL` | `plamo-3-translate:2b` | 使用モデル名 |
+| `OLLAMA_MODEL_SOURCE` | `hf.co/pfnet/plamo-3-translate-2b-GGUF:Q4_K_M` | モデル導入元（Hugging Face の GGUF） |
 | `OLLAMA_TIMEOUT` | `120` | 推論タイムアウト（秒） |
 
 ## Tailscale 経由の公開
@@ -62,6 +64,7 @@ tailscale serve --bg --https=3374 3374
 画面右上のボタンから操作できます（実行前に確認ダイアログが出ます）。
 
 - **Ollama**: 未導入のときだけ押せる。公式インストーラー（`https://ollama.com/install.sh`）で導入し、サービスを起動する。導入済みになると自動で無効化される
+- **plamo-3-translate:2b**: モデル未導入のときだけ押せる。Hugging Face の GGUF（Q4_K_M）を取得し、`plamo-3-translate:2b` として登録する。Ollama 未導入時は押せない
 - **アップデート**: `https://github.com/hirogura/honyaku.git` の `main` を `git pull --ff-only` で取得
 - **再起動**: サービスを終了し、`run.sh` で起動し直す（ログは `logs/app.log`）
 
