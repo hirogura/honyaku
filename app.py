@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pwd
 import shlex
 import shutil
 import subprocess
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -141,8 +143,69 @@ async def _request_translation(request: Request, prompt: str) -> str:
     return translation
 
 
+_OLLAMA_CHECK_INTERVAL = 30.0
+_ollama_check_cache: tuple[float, bool] = (0.0, False)
+
+
+def _ollama_env() -> dict[str, str]:
+    """ollama CLI / サーバー実行用の環境変数を作る。
+
+    systemd 配下では HOME が設定されないことがあり、ollama は
+    $HOME が未定義だと即座に panic するため補う。
+    """
+    env = {**os.environ}
+    if not env.get("HOME"):
+        try:
+            entry = pwd.getpwuid(os.getuid())
+            env["HOME"] = entry.pw_dir
+        except KeyError:
+            env["HOME"] = "/root"
+    return env
+
+
 def ollama_installed() -> bool:
-    return shutil.which("ollama") is not None
+    """ollama コマンドがあり、実際に実行できることを確認する。
+
+    ダウンロードの中断などでバイナリが壊れることがあるため、単なる
+    存在チェックではなく --version の実行も確認する。
+    """
+    global _ollama_check_cache
+    if shutil.which("ollama") is None:
+        return False
+    cached_at, cached = _ollama_check_cache
+    now = time.monotonic()
+    if now - cached_at < _OLLAMA_CHECK_INTERVAL:
+        return cached
+    try:
+        completed = subprocess.run(
+            ["ollama", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+            env=_ollama_env(),
+        )
+        installed = completed.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        installed = False
+    _ollama_check_cache = (now, installed)
+    return installed
+
+
+def _own_systemd_unit() -> str | None:
+    """このプロセスが属する systemd ユニット名を返す。
+
+    systemd 配下でない場合は None を返す。
+    """
+    try:
+        cgroup = Path("/proc/self/cgroup").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for entry in cgroup.splitlines():
+        name = entry.rsplit(":", 1)[-1]
+        if name.endswith(".service"):
+            return name.rsplit("/", 1)[-1]
+    return None
 
 
 async def ollama_responding(timeout: float = 2.0) -> bool:
@@ -169,6 +232,7 @@ async def _run_command(command: list[str], timeout: float) -> tuple[int, str]:
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env=_ollama_env(),
     )
     try:
         output, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
@@ -197,6 +261,7 @@ async def _ensure_ollama_service() -> None:
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=_ollama_env(),
         )
 
     for _ in range(60):
@@ -263,7 +328,7 @@ async def _run_ollama_install() -> None:
             f"curl -fsSL {shlex.quote(OLLAMA_INSTALL_URL)} | sh",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+            env={**_ollama_env(), "DEBIAN_FRONTEND": "noninteractive"},
         )
         raw, _ = await asyncio.wait_for(process.communicate(), timeout=OLLAMA_INSTALL_TIMEOUT)
         output = (raw or b"").decode("utf-8", "replace").strip()
@@ -444,6 +509,22 @@ async def update() -> dict:
 async def restart() -> dict:
     """このサービスを新しいプロセスとして起動し直す。"""
     LOG_FILE.parent.mkdir(exist_ok=True)
+    unit = _own_systemd_unit()
+    if unit is not None:
+        # systemd 管理下では systemctl で再起動する。自前で kill すると
+        # uvicorn が正常終了扱いになり Restart=on-failure が反応せず、
+        # さらに cgroup の清掃で後続の run.sh も消えるため、サービスが
+        # 二度と起動しなくなる。
+        script = f"sleep 1\nexec systemctl restart --no-block {shlex.quote(unit)}\n"
+        subprocess.Popen(
+            ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return {"ok": True, "mode": "systemd"}
+
     pid = os.getpid()
     script = (
         "sleep 1\n"

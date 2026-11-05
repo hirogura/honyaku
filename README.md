@@ -9,7 +9,7 @@ Ollama API（PFML3 プロンプト）経由で利用し、ゲストの原文を�
 - `static/index.html` — 受付用 UI（言語ボタン / 原文 / ➔ / 訳文）
 - `run.sh` — 起動スクリプト（`127.0.0.1:3374` 固定）
 
-現在のバージョン: `v.0.9.1`（画面右上に表示）
+現在のバージョン: `v.0.9.2`（画面右上に表示）
 
 ## セットアップ
 
@@ -76,10 +76,10 @@ Web Speech API を使うため Chrome / Safari を推奨します（HTTPS が必
 
 画面右上のボタンから操作できます（実行前に確認ダイアログが出ます）。
 
-- **Ollama**: 未導入のときだけ押せる。公式インストーラー（`https://ollama.com/install.sh`）で導入し、サービスを起動する。導入済みになると自動で無効化される
+- **Ollama**: 実行が確認できないときに押せる。公式インストーラー（`https://ollama.com/install.sh`）で導入し、サービスを起動する。ダウンロードの中断などでバイナリが壊れている場合も、このボタンから導入し直せる
 - **plamo-3-translate:2b**: モデル未導入のときだけ押せる。Hugging Face の GGUF（Q4_K_M）を取得し、`plamo-3-translate:2b` として登録する。Ollama 未導入時は押せない
 - **アップデート**: `https://github.com/hirogura/honyaku.git` の `main` を `git pull --ff-only` で取得
-- **再起動**: サービスを終了し、`run.sh` で起動し直す（ログは `logs/app.log`）
+- **再起動**: サービスを新しいプロセスで起動し直す（ログは `logs/app.log`）。systemd 配下（`honyaku.service`）では `systemctl restart` を使うため、自前 kill によるサービスの二度上がらない問題は起きない
 
 アップデート後は「再起動」を押すと内容が反映されます。ローカルに未コミットの変更や
 未プッシュのコミットがある場合、`--ff-only` のためアップデートは失敗します。
