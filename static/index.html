@@ -251,10 +251,57 @@
 
   .pane-foot {
     margin-top: 8px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
     font-size: 12px;
     color: #90a3b5;
     letter-spacing: 0.03em;
   }
+
+  .voice-btn {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 6px 18px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: #284862;
+    background: #f4f8fd;
+    border: 1.5px solid var(--line);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .voice-btn:hover:not(:disabled) { border-color: #8fb8e0; background: #eaf3fd; }
+  .voice-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .voice-btn.is-listening {
+    color: #fff;
+    background: #c62828;
+    border-color: #a51f1f;
+  }
+
+  .voice-btn.is-listening::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    vertical-align: 1px;
+    border-radius: 50%;
+    background: #fff;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .voice-btn:focus-visible {
+    outline: 3px solid #1c8cf0;
+    outline-offset: 2px;
+  }
+
+  @keyframes pulse { 50% { opacity: 0.25; } }
 
   /* ---------- 翻訳ボタン ---------- */
   .action {
@@ -369,7 +416,7 @@
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.5.0</span>
+      <span class="version">v.0.6.0</span>
     </div>
     <div class="header-actions">
       <button id="ollama" class="header-btn" type="button">Ollama</button>
@@ -392,7 +439,10 @@
         autocorrect="off"
         spellcheck="false"
         placeholder="Please enter here / ここに入力してください"></textarea>
-      <p class="pane-foot">Ctrl + Enter でも翻訳できます</p>
+      <div class="pane-foot">
+        <button id="voice-source" class="voice-btn" type="button" aria-pressed="false">音声</button>
+        <span>Ctrl + Enter でも翻訳できます</span>
+      </div>
     </section>
 
     <div class="action">
@@ -410,7 +460,10 @@
         maxlength="2000"
         spellcheck="false"
         placeholder="翻訳結果がここに表示されます"></textarea>
-      <p class="pane-foot">Ctrl + Enter でも翻訳できます</p>
+      <div class="pane-foot">
+        <button id="voice-result" class="voice-btn" type="button" aria-pressed="false">音声</button>
+        <span>Ctrl + Enter でも翻訳できます</span>
+      </div>
     </section>
   </main>
 
@@ -423,10 +476,24 @@
   const translateButton = document.getElementById("translate");
   const reverseButton = document.getElementById("translate-reverse");
 
+  const SPEECH_LANGUAGES = {
+    en: "en-US",
+    "zh-Hans": "zh-CN",
+    "zh-Hant": "zh-TW",
+    ko: "ko-KR",
+    vi: "vi-VN",
+    tl: "fil-PH",
+    es: "es-ES",
+  };
+
   let selectedLanguage = null;
   let translating = false;
+  let sourceVoice = null;
+  let resultVoice = null;
+  let activeVoice = null;
 
   function selectLanguage(code) {
+    if (sourceVoice) sourceVoice.stop();
     selectedLanguage = code;
     for (const button of languageNav.querySelectorAll(".lang-btn")) {
       button.setAttribute("aria-pressed", String(button.dataset.code === code));
@@ -537,6 +604,90 @@
     } finally {
       setTranslating(false);
     }
+  }
+
+  function createVoiceInput(button, textarea, getLanguage) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      button.disabled = true;
+      button.title = "このブラウザは音声入力に対応していません（Chrome / Safari をお使いください）";
+      return null;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    let listening = false;
+    let baseText = "";
+
+    function setListening(value) {
+      listening = value;
+      button.classList.toggle("is-listening", value);
+      button.setAttribute("aria-pressed", String(value));
+      button.textContent = value ? "停止" : "音声";
+    }
+
+    const controller = {
+      stop() {
+        if (listening) recognition.stop();
+      },
+      toggle() {
+        if (listening) {
+          recognition.stop();
+          return;
+        }
+
+        if (activeVoice && activeVoice !== controller) activeVoice.stop();
+        activeVoice = controller;
+        baseText = textarea.value.trim();
+
+        const language = getLanguage();
+        if (language) recognition.lang = language;
+        else recognition.lang = navigator.language || "en-US";
+
+        try {
+          recognition.start();
+        } catch (error) {
+          console.error(error);
+          if (activeVoice === controller) activeVoice = null;
+          showNotice("音声入力を開始できませんでした。", "error");
+        }
+      },
+    };
+
+    recognition.addEventListener("start", () => setListening(true));
+
+    recognition.addEventListener("result", (event) => {
+      let transcript = "";
+      for (let index = 0; index < event.results.length; index += 1) {
+        transcript += event.results[index][0].transcript;
+      }
+      const prefix = baseText ? baseText + " " : "";
+      const maxLength = Number(textarea.getAttribute("maxlength")) || 2000;
+      textarea.value = (prefix + transcript).trim().slice(0, maxLength);
+    });
+
+    recognition.addEventListener("end", () => {
+      setListening(false);
+      if (activeVoice === controller) activeVoice = null;
+    });
+
+    recognition.addEventListener("error", (event) => {
+      if (event.error === "aborted") return;
+      const messages = {
+        "not-allowed": "マイクの使用が許可されていません。ブラウザの設定を確認してください。",
+        "audio-capture": "マイクが見つかりません。接続を確認してください。",
+        "no-speech": "音声が聞き取れませんでした。もう一度お試しください。",
+        network: "音声認識サーバーに接続できませんでした。",
+      };
+      showNotice(messages[event.error] || "音声入力を開始できませんでした。", "error");
+    });
+
+    button.addEventListener("click", controller.toggle);
+    return controller;
   }
 
   const ollamaButton = document.getElementById("ollama");
@@ -857,6 +1008,17 @@
       translateReverse();
     }
   });
+
+  sourceVoice = createVoiceInput(
+    document.getElementById("voice-source"),
+    source,
+    () => SPEECH_LANGUAGES[selectedLanguage] || navigator.language || "",
+  );
+  resultVoice = createVoiceInput(
+    document.getElementById("voice-result"),
+    result,
+    () => "ja-JP",
+  );
 
   syncHeaderButtons();
   loadLanguages();
