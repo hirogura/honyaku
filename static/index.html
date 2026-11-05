@@ -362,9 +362,10 @@
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.1.0</span>
+      <span class="version">v.0.2.0</span>
     </div>
     <div class="header-actions">
+      <button id="ollama" class="header-btn" type="button">Ollama</button>
       <button id="update" class="header-btn" type="button">アップデート</button>
       <button id="restart" class="header-btn" type="button">再起動</button>
     </div>
@@ -488,11 +489,14 @@
     }
   }
 
+  const ollamaButton = document.getElementById("ollama");
   const updateButton = document.getElementById("update");
   const restartButton = document.getElementById("restart");
   const notice = document.getElementById("notice");
 
   let maintenanceBusy = false;
+  let installRunning = false;
+  let ollamaInstalled = false;
 
   function showNotice(text, kind) {
     notice.textContent = text;
@@ -500,10 +504,16 @@
     notice.hidden = false;
   }
 
+  function syncHeaderButtons() {
+    updateButton.disabled = maintenanceBusy;
+    restartButton.disabled = maintenanceBusy;
+    ollamaButton.disabled = maintenanceBusy || installRunning || ollamaInstalled;
+    ollamaButton.title = ollamaInstalled ? "Ollama はインストール済みです" : "";
+  }
+
   function setMaintenanceBusy(busy) {
     maintenanceBusy = busy;
-    updateButton.disabled = busy;
-    restartButton.disabled = busy;
+    syncHeaderButtons();
   }
 
   async function runUpdate() {
@@ -575,6 +585,97 @@
     setMaintenanceBusy(false);
   }
 
+  async function refreshOllamaStatus() {
+    try {
+      const response = await fetch("/api/ollama", { cache: "no-store" });
+      if (!response.ok) return null;
+      const data = await response.json();
+      ollamaInstalled = Boolean(data.installed);
+      if (data.state === "installing") installRunning = true;
+      syncHeaderButtons();
+      return data;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function waitForOllamaInstall() {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const data = await refreshOllamaStatus();
+      if (data && data.installed) return data;
+      if (data && data.state === "error") return data;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    return null;
+  }
+
+  async function runOllamaInstall() {
+    if (maintenanceBusy || installRunning || ollamaInstalled) return;
+    if (!window.confirm("Ollama をインストールします。回線状況により数分かかる場合があります。よろしいですか？")) return;
+
+    setMaintenanceBusy(true);
+    installRunning = true;
+    syncHeaderButtons();
+    showNotice("Ollama をインストールしています…（数分かかる場合があります）");
+
+    try {
+      const response = await fetch("/api/ollama/install", { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error((data && data.detail) || "インストールを開始できませんでした。");
+      }
+    } catch (error) {
+      console.error(error);
+      installRunning = false;
+      setMaintenanceBusy(false);
+      showNotice(error.message || "インストールを開始できませんでした。", "error");
+      return;
+    }
+
+    const result = await waitForOllamaInstall();
+    installRunning = false;
+    setMaintenanceBusy(false);
+
+    if (result && result.installed) {
+      ollamaInstalled = true;
+      syncHeaderButtons();
+      showNotice("Ollama のインストールが完了しました。", "success");
+      return;
+    }
+
+    showNotice(
+      (result && result.message) || "インストールの完了を確認できませんでした。ログを確認してください。",
+      "error",
+    );
+  }
+
+  async function initOllama() {
+    const data = await refreshOllamaStatus();
+    if (!data || data.state !== "installing") return;
+
+    setMaintenanceBusy(true);
+    installRunning = true;
+    syncHeaderButtons();
+    showNotice("Ollama をインストールしています…（数分かかる場合があります）");
+
+    const result = await waitForOllamaInstall();
+    installRunning = false;
+    setMaintenanceBusy(false);
+
+    if (result && result.installed) {
+      ollamaInstalled = true;
+      syncHeaderButtons();
+      showNotice("Ollama のインストールが完了しました。", "success");
+      return;
+    }
+
+    showNotice(
+      (result && result.message) || "インストールの完了を確認できませんでした。ログを確認してください。",
+      "error",
+    );
+  }
+
+  ollamaButton.addEventListener("click", runOllamaInstall);
   updateButton.addEventListener("click", runUpdate);
   restartButton.addEventListener("click", runRestart);
 
@@ -588,7 +689,9 @@
   });
 
   setResult(EMPTY_MESSAGE, "is-empty");
+  syncHeaderButtons();
   loadLanguages();
+  initOllama();
 </script>
 </body>
 </html>

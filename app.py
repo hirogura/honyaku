@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import shutil
 import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,13 @@ MAX_INPUT_CHARS = 2000
 UPDATE_REPO_URL = "https://github.com/hirogura/honyaku.git"
 UPDATE_BRANCH = "main"
 LOG_FILE = BASE_DIR / "logs" / "app.log"
+
+OLLAMA_INSTALL_URL = os.environ.get("OLLAMA_INSTALL_URL", "https://ollama.com/install.sh")
+OLLAMA_INSTALL_TIMEOUT = float(os.environ.get("OLLAMA_INSTALL_TIMEOUT", "1800"))
+OLLAMA_INSTALL_LOG = BASE_DIR / "logs" / "ollama-install.log"
+OLLAMA_SERVE_LOG = BASE_DIR / "logs" / "ollama.log"
+OLLAMA_INSTALL_STATE: dict[str, str] = {"state": "idle", "message": ""}
+_ollama_install_task: asyncio.Task | None = None
 
 # 受付でよく使われる言語。並び順がそのまま画面のボタン順になる。
 LANGUAGES = (
@@ -75,6 +83,105 @@ def build_user_prompt(language: dict, text: str) -> str:
         "余計な解説や補足は加えず、翻訳結果だけを出力してください。\n\n"
         f"{text.strip()}"
     )
+
+
+def ollama_installed() -> bool:
+    return shutil.which("ollama") is not None
+
+
+async def ollama_responding(timeout: float = 2.0) -> bool:
+    """Ollama の API が応答するかを確認する。"""
+    try:
+        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=timeout) as client:
+            response = await client.get("/api/tags")
+            return response.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def _append_log(path: Path, text: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+    except OSError:
+        pass
+
+
+async def _run_command(command: list[str], timeout: float) -> tuple[int, str]:
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        return -1, "timeout"
+    return process.returncode or 0, (output or b"").decode("utf-8", "replace")
+
+
+async def _ensure_ollama_service() -> None:
+    """インストール後に Ollama のサービスが起動していることを確認する。"""
+    if await ollama_responding():
+        return
+
+    if Path("/run/systemd/system").is_dir() and shutil.which("systemctl"):
+        await _run_command(["systemctl", "start", "ollama"], timeout=120)
+        if await ollama_responding():
+            return
+
+    OLLAMA_SERVE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with OLLAMA_SERVE_LOG.open("ab") as log_handle:
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    for _ in range(60):
+        if await ollama_responding():
+            return
+        await asyncio.sleep(1)
+
+
+async def _run_ollama_install() -> None:
+    process: asyncio.subprocess.Process | None = None
+    output = ""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-c",
+            f"curl -fsSL {shlex.quote(OLLAMA_INSTALL_URL)} | sh",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+        )
+        raw, _ = await asyncio.wait_for(process.communicate(), timeout=OLLAMA_INSTALL_TIMEOUT)
+        output = (raw or b"").decode("utf-8", "replace").strip()
+        _append_log(OLLAMA_INSTALL_LOG, output)
+
+        if process.returncode != 0:
+            raise RuntimeError("インストーラーがエラーで終了しました。")
+        if not ollama_installed():
+            raise RuntimeError("インストール後に ollama コマンドが見つかりませんでした。")
+
+        await _ensure_ollama_service()
+        OLLAMA_INSTALL_STATE.update(state="installed", message="Ollama のインストールが完了しました。")
+    except asyncio.TimeoutError:
+        if process is not None:
+            process.kill()
+            await process.wait()
+        OLLAMA_INSTALL_STATE.update(state="error", message="インストールがタイムアウトしました。")
+    except Exception as exc:
+        detail = str(exc)
+        if output:
+            detail += "\n" + output[-1200:]
+        OLLAMA_INSTALL_STATE.update(state="error", message=detail)
 
 
 @asynccontextmanager
@@ -152,6 +259,34 @@ async def translate(payload: TranslateRequest, request: Request) -> TranslateRes
         raise HTTPException(status_code=502, detail="翻訳結果が空でした。もう一度お試しください。")
 
     return TranslateResponse(translation=translation, model=OLLAMA_MODEL)
+
+
+@app.get("/api/ollama")
+async def ollama_status() -> dict:
+    installed = ollama_installed()
+    return {
+        "installed": installed,
+        "running": await ollama_responding() if installed else False,
+        "state": OLLAMA_INSTALL_STATE["state"],
+        "message": OLLAMA_INSTALL_STATE["message"],
+    }
+
+
+@app.post("/api/ollama/install", status_code=202)
+async def install_ollama() -> dict:
+    """Ollama を公式インストーラーで導入する（非同期実行）。"""
+    global _ollama_install_task
+
+    if ollama_installed():
+        OLLAMA_INSTALL_STATE.update(state="installed", message="Ollama はインストール済みです。")
+        return {"ok": True, "state": "installed"}
+
+    if _ollama_install_task is not None and not _ollama_install_task.done():
+        raise HTTPException(status_code=409, detail="Ollama をインストール中です。しばらくお待ちください。")
+
+    OLLAMA_INSTALL_STATE.update(state="installing", message="インストールしています…")
+    _ollama_install_task = asyncio.create_task(_run_ollama_install())
+    return {"ok": True, "state": "installing"}
 
 
 @app.post("/api/update")

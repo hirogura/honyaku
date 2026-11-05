@@ -9,7 +9,7 @@ OpenAI 互換 API 経由で利用し、ゲストの原文を日本語（です�
 - `static/index.html` — 受付用 UI（言語ボタン / 原文 / ➔ / 訳文）
 - `run.sh` — 起動スクリプト（`127.0.0.1:3374` 固定）
 
-現在のバージョン: `v.0.1.0`（画面右上に表示）
+現在のバージョン: `v.0.2.0`（画面右上に表示）
 
 ## セットアップ
 
@@ -20,6 +20,8 @@ python3 -m venv .venv
 # Ollama 側でモデルを取得（名前は環境に合わせて変更）
 ollama pull plamo-3-translate:2b
 ```
+
+Ollama 本体は画面右上の「Ollama」ボタンからも導入できます（モデルの取得は別途必要）。
 
 ## 起動
 
@@ -59,6 +61,7 @@ tailscale serve --bg --https=3374 3374
 
 画面右上のボタンから操作できます（実行前に確認ダイアログが出ます）。
 
+- **Ollama**: 未導入のときだけ押せる。公式インストーラー（`https://ollama.com/install.sh`）で導入し、サービスを起動する。導入済みになると自動で無効化される
 - **アップデート**: `https://github.com/hirogura/honyaku.git` の `main` を `git pull --ff-only` で取得
 - **再起動**: サービスを終了し、`run.sh` で起動し直す（ログは `logs/app.log`）
 
