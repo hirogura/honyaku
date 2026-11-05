@@ -70,18 +70,75 @@ class TranslateResponse(BaseModel):
     model: str
 
 
-def build_translation_prompt(language: dict, text: str) -> str:
+def build_translation_prompt(
+    text: str, source_lang: str | None, target_lang: str, form: str | None = None
+) -> str:
     """PLaMo 3 Translate の PFML3 プロンプトを組み立てる。
 
-    原文と言語情報だけを渡し、日本語（です・ます調）への翻訳を指示する。
+    原文と言語情報だけを渡し、翻訳の指示文は含めない。
     """
     parts = ["<|plamo:tag|>dataset<|plamo:msg|>translation", "<|plamo:tag|>input"]
-    if language["plamo_lang"]:
-        parts.append(f"<|plamo:key|>lang<|plamo:val|>{language['plamo_lang']}")
+    if source_lang:
+        parts.append(f"<|plamo:key|>lang<|plamo:val|>{source_lang}")
     parts.append(f"<|plamo:msg|>{text}")
-    parts.append("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja")
-    parts.append("<|plamo:key|>form<|plamo:val|>polite<|plamo:msg|>")
+    parts.append(f"<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>{target_lang}")
+    if form:
+        parts.append(f"<|plamo:key|>form<|plamo:val|>{form}")
+    parts.append("<|plamo:msg|>")
     return "".join(parts)
+
+
+def _validated_text(raw: str) -> str:
+    text = raw.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="原文が入力されていません。")
+    if "<|plamo:" in text:
+        raise HTTPException(status_code=400, detail="原文に使用できない文字列が含まれています。")
+    return text
+
+
+async def _request_translation(request: Request, prompt: str) -> str:
+    request_body = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "raw": True,
+        "stream": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 1024,
+            "stop": ["<|plamo:tag|>", "<|plamo:bos|>"],
+        },
+    }
+
+    try:
+        response = await request.app.state.ollama.post("/api/generate", json=request_body)
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=504, detail="翻訳サーバーの応答がタイムアウトしました。もう一度お試しください。"
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"翻訳サーバーがエラーを返しました（HTTP {exc.response.status_code}）。",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="翻訳サーバー（Ollama）に接続できません。起動状態を確認してください。",
+        ) from exc
+
+    try:
+        translation = response.json()["response"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502, detail="翻訳サーバーの応答を解釈できませんでした。"
+        ) from exc
+
+    translation = (translation or "").strip()
+    if not translation:
+        raise HTTPException(status_code=502, detail="翻訳結果が空でした。もう一度お試しください。")
+    return translation
 
 
 def ollama_installed() -> bool:
@@ -257,57 +314,32 @@ async def languages() -> list[dict]:
 
 @app.post("/api/translate", response_model=TranslateResponse)
 async def translate(payload: TranslateRequest, request: Request) -> TranslateResponse:
+    """選択言語の原文を日本語（です・ます調）に翻訳する。"""
     language = LANGUAGE_BY_CODE.get(payload.language)
     if language is None:
         raise HTTPException(status_code=400, detail="未対応の言語が選択されています。")
 
-    text = payload.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="原文が入力されていません。")
-    if "<|plamo:" in text:
-        raise HTTPException(status_code=400, detail="原文に使用できない文字列が含まれています。")
+    text = _validated_text(payload.text)
+    prompt = build_translation_prompt(text, language["plamo_lang"], "ja", "polite")
+    translation = await _request_translation(request, prompt)
+    return TranslateResponse(translation=translation, model=OLLAMA_MODEL)
 
-    request_body = {
-        "model": OLLAMA_MODEL,
-        "prompt": build_translation_prompt(language, text),
-        "raw": True,
-        "stream": False,
-        "options": {
-            "temperature": 0,
-            "num_predict": 1024,
-            "stop": ["<|plamo:tag|>", "<|plamo:bos|>"],
-        },
-    }
 
-    try:
-        response = await request.app.state.ollama.post("/api/generate", json=request_body)
-        response.raise_for_status()
-    except httpx.TimeoutException as exc:
+@app.post("/api/translate/reverse", response_model=TranslateResponse)
+async def translate_reverse(payload: TranslateRequest, request: Request) -> TranslateResponse:
+    """日本語を選択言語へ翻訳する。"""
+    language = LANGUAGE_BY_CODE.get(payload.language)
+    if language is None:
+        raise HTTPException(status_code=400, detail="未対応の言語が選択されています。")
+    if language["plamo_lang"] is None:
         raise HTTPException(
-            status_code=504, detail="翻訳サーバーの応答がタイムアウトしました。もう一度お試しください。"
-        ) from exc
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"翻訳サーバーがエラーを返しました（HTTP {exc.response.status_code}）。",
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="翻訳サーバー（Ollama）に接続できません。起動状態を確認してください。",
-        ) from exc
+            status_code=400,
+            detail="「Other Languages」では逆方向の翻訳ができません。言語を選択してください。",
+        )
 
-    try:
-        translation = response.json()["response"]
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=502, detail="翻訳サーバーの応答を解釈できませんでした。"
-        ) from exc
-
-    translation = (translation or "").strip()
-    if not translation:
-        raise HTTPException(status_code=502, detail="翻訳結果が空でした。もう一度お試しください。")
-
+    text = _validated_text(payload.text)
+    prompt = build_translation_prompt(text, "ja", language["plamo_lang"])
+    translation = await _request_translation(request, prompt)
     return TranslateResponse(translation=translation, model=OLLAMA_MODEL)
 
 
