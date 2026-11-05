@@ -1,6 +1,6 @@
 """受付用 PLaMo 3 Translate Web アプリ。
 
-Ollama (127.0.0.1:11434) の OpenAI 互換 API に翻訳リクエストを送り、
+Ollama (127.0.0.1:11434) の /api/generate に PFML3 プロンプトを送り、
 ホテル・施設の受付スタッフ向けの大きな 2 カラム UI を提供する。
 
 起動: ./run.sh （127.0.0.1:3374 のみで待ち受ける）
@@ -48,21 +48,16 @@ _model_install_task: asyncio.Task | None = None
 
 # 受付でよく使われる言語。並び順がそのまま画面のボタン順になる。
 LANGUAGES = (
-    {"code": "en", "label": "English", "html_lang": "en", "prompt_name": "英語"},
-    {"code": "zh-Hans", "label": "简体中文", "html_lang": "zh-Hans", "prompt_name": "中国語（簡体字）"},
-    {"code": "zh-Hant", "label": "繁體中文", "html_lang": "zh-Hant", "prompt_name": "中国語（繁体字）"},
-    {"code": "ko", "label": "한국어", "html_lang": "ko", "prompt_name": "韓国語"},
-    {"code": "vi", "label": "Tiếng Việt", "html_lang": "vi", "prompt_name": "ベトナム語"},
-    {"code": "tl", "label": "Tagalog", "html_lang": "tl", "prompt_name": "タガログ語"},
-    {"code": "es", "label": "Español", "html_lang": "es", "prompt_name": "スペイン語"},
-    {"code": "auto", "label": "Other Languages", "html_lang": "", "prompt_name": None},
+    {"code": "en", "label": "English", "html_lang": "en", "plamo_lang": "en"},
+    {"code": "zh-Hans", "label": "简体中文", "html_lang": "zh-Hans", "plamo_lang": "zh-hans"},
+    {"code": "zh-Hant", "label": "繁體中文", "html_lang": "zh-Hant", "plamo_lang": "zh-hant"},
+    {"code": "ko", "label": "한국어", "html_lang": "ko", "plamo_lang": "ko"},
+    {"code": "vi", "label": "Tiếng Việt", "html_lang": "vi", "plamo_lang": "vi"},
+    {"code": "tl", "label": "Tagalog", "html_lang": "tl", "plamo_lang": "tl"},
+    {"code": "es", "label": "Español", "html_lang": "es", "plamo_lang": "es"},
+    {"code": "auto", "label": "Other Languages", "html_lang": "", "plamo_lang": None},
 )
 LANGUAGE_BY_CODE = {language["code"]: language for language in LANGUAGES}
-
-SYSTEM_PROMPT = (
-    "あなたはホテル・施設の受付で働くプロの翻訳者です。"
-    "ゲストの言葉を、受付スタッフがすぐに読める自然で丁寧な日本語（です・ます調）に翻訳します。"
-)
 
 
 class TranslateRequest(BaseModel):
@@ -75,20 +70,18 @@ class TranslateResponse(BaseModel):
     model: str
 
 
-def build_user_prompt(language: dict, text: str) -> str:
-    """選択言語に応じた翻訳指示文を組み立てる。"""
-    if language["prompt_name"] is None:
-        source = "文章（言語は自動的に判別してください）"
-    else:
-        source = f"{language['prompt_name']}の文章"
+def build_translation_prompt(language: dict, text: str) -> str:
+    """PLaMo 3 Translate の PFML3 プロンプトを組み立てる。
 
-    return (
-        f"次の{source}を、ホテル・施設の受付スタッフが読むための、"
-        "自然で丁寧な日本語（です・ます調）に翻訳してください。\n"
-        "固有名詞・数値・日付・時刻・部屋番号などは正確に保ってください。\n"
-        "余計な解説や補足は加えず、翻訳結果だけを出力してください。\n\n"
-        f"{text.strip()}"
-    )
+    原文と言語情報だけを渡し、日本語（です・ます調）への翻訳を指示する。
+    """
+    parts = ["<|plamo:tag|>dataset<|plamo:msg|>translation", "<|plamo:tag|>input"]
+    if language["plamo_lang"]:
+        parts.append(f"<|plamo:key|>lang<|plamo:val|>{language['plamo_lang']}")
+    parts.append(f"<|plamo:msg|>{text}")
+    parts.append("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja")
+    parts.append("<|plamo:key|>form<|plamo:val|>polite<|plamo:msg|>")
+    return "".join(parts)
 
 
 def ollama_installed() -> bool:
@@ -271,20 +264,23 @@ async def translate(payload: TranslateRequest, request: Request) -> TranslateRes
     text = payload.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="原文が入力されていません。")
+    if "<|plamo:" in text:
+        raise HTTPException(status_code=400, detail="原文に使用できない文字列が含まれています。")
 
     request_body = {
         "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_prompt(language, text)},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 1024,
+        "prompt": build_translation_prompt(language, text),
+        "raw": True,
         "stream": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 1024,
+            "stop": ["<|plamo:tag|>", "<|plamo:bos|>"],
+        },
     }
 
     try:
-        response = await request.app.state.ollama.post("/v1/chat/completions", json=request_body)
+        response = await request.app.state.ollama.post("/api/generate", json=request_body)
         response.raise_for_status()
     except httpx.TimeoutException as exc:
         raise HTTPException(
@@ -302,8 +298,8 @@ async def translate(payload: TranslateRequest, request: Request) -> TranslateRes
         ) from exc
 
     try:
-        translation = response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        translation = response.json()["response"]
+    except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=502, detail="翻訳サーバーの応答を解釈できませんでした。"
         ) from exc
