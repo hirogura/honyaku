@@ -37,9 +37,9 @@
 
   /* ---------- ヘッダー ---------- */
   .app-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
     gap: 14px;
     padding: 12px 24px;
     background: var(--panel);
@@ -52,6 +52,7 @@
     gap: 12px;
     flex-wrap: wrap;
     min-width: 0;
+    justify-self: start;
   }
 
   .brand h1 {
@@ -76,7 +77,7 @@
   .header-actions {
     display: flex;
     gap: 8px;
-    flex: 0 0 auto;
+    justify-self: end;
   }
 
   .header-btn {
@@ -102,26 +103,37 @@
     outline-offset: 2px;
   }
 
+  /* ヘッダー中央に固定表示する。表示・非表示で高さが変わらないよう常に領域を確保する。 */
   .notice {
-    padding: 10px 24px;
+    justify-self: center;
+    min-width: 0;
+    max-width: 100%;
+    padding: 8px 18px;
     font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
+    line-height: 1.4;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: #6d5200;
     background: #fff8e6;
-    border-bottom: 1px solid #f0e0b0;
+    border: 1px solid #f0e0b0;
+    border-radius: 999px;
+    visibility: hidden;
   }
+
+  .notice.is-visible { visibility: visible; }
 
   .notice.is-success {
     color: #1e6b3a;
     background: #e9f7ef;
-    border-bottom-color: #c4e6d2;
+    border-color: #c4e6d2;
   }
 
   .notice.is-error {
     color: #8c1d18;
     background: #fdecea;
-    border-bottom-color: #f5c6c2;
+    border-color: #f5c6c2;
   }
 
   /* ---------- レイアウト（左→右の流れ） ---------- */
@@ -378,10 +390,18 @@
   @media (max-width: 900px) {
     body { height: auto; }
 
-    .app-header { padding: 10px 16px; flex-wrap: wrap; row-gap: 8px; }
-    .brand { gap: 8px; }
+    .app-header {
+      padding: 10px 16px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "brand actions"
+        "notice notice";
+      row-gap: 8px;
+    }
+    .brand { gap: 8px; grid-area: brand; }
+    .header-actions { grid-area: actions; }
     .header-btn { min-height: 36px; padding: 6px 12px; font-size: 13px; }
-    .notice { padding: 8px 16px; font-size: 13px; }
+    .notice { grid-area: notice; padding: 6px 14px; font-size: 13px; }
 
     .layout {
       grid-template-columns: 1fr;
@@ -428,8 +448,9 @@
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.6.0</span>
+      <span class="version">v.0.7.0</span>
     </div>
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
     <div class="header-actions">
       <button id="ollama" class="header-btn" type="button">Ollama</button>
       <button id="model" class="header-btn" type="button">plamo-3-translate:2b</button>
@@ -437,7 +458,6 @@
       <button id="restart" class="header-btn" type="button">再起動</button>
     </div>
   </header>
-  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
   <main class="layout">
     <nav class="languages" id="languages" aria-label="言語選択 / Language selection"></nav>
@@ -542,12 +562,12 @@
     }
   }
 
-  function setTranslating(busy) {
+  function setTranslating(busy, activeButton) {
     translating = busy;
     translateButton.disabled = busy;
     reverseButton.disabled = busy;
-    translateButton.classList.toggle("is-loading", busy);
-    reverseButton.classList.toggle("is-loading", busy);
+    translateButton.classList.toggle("is-loading", busy && activeButton === translateButton);
+    reverseButton.classList.toggle("is-loading", busy && activeButton === reverseButton);
   }
 
   async function requestTranslation(endpoint, text) {
@@ -575,7 +595,7 @@
       return;
     }
 
-    setTranslating(true);
+    setTranslating(true, translateButton);
     showNotice("翻訳しています…");
 
     try {
@@ -586,7 +606,7 @@
       console.error(error);
       showNotice(error.message || "通信エラーが発生しました。", "error");
     } finally {
-      setTranslating(false);
+      setTranslating(false, translateButton);
     }
   }
 
@@ -605,7 +625,7 @@
       return;
     }
 
-    setTranslating(true);
+    setTranslating(true, reverseButton);
     showNotice("翻訳しています…");
 
     try {
@@ -616,7 +636,7 @@
       console.error(error);
       showNotice(error.message || "通信エラーが発生しました。", "error");
     } finally {
-      setTranslating(false);
+      setTranslating(false, reverseButton);
     }
   }
 
@@ -735,13 +755,13 @@
 
   function showNotice(text, kind) {
     notice.textContent = text;
-    notice.className = "notice" + (kind ? " is-" + kind : "");
-    notice.hidden = false;
+    notice.title = text;
+    notice.className = "notice is-visible" + (kind ? " is-" + kind : "");
   }
 
   function hideNotice() {
-    notice.hidden = true;
     notice.textContent = "";
+    notice.title = "";
     notice.className = "notice";
   }
 
