@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b6bcb">
+<title>受付翻訳 | Reception Translation</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #eef3f9;
+    --panel: #ffffff;
+    --ink: #132b42;
+    --muted: #5c7186;
+    --line: #d5e0ec;
+    --accent: #0b6bcb;
+    --accent-dark: #084f97;
+    --error: #b3261e;
+    --radius: 20px;
+    font-size: 16px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* ---------- ヘッダー ---------- */
+  .app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 24px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .brand h1 {
+    margin: 0;
+    font-size: clamp(20px, 1.8vw, 26px);
+    letter-spacing: 0.02em;
+  }
+
+  .brand .sub {
+    font-size: 14px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+
+  .brand .version {
+    font-size: 12px;
+    font-weight: 600;
+    color: #8fa3b8;
+    letter-spacing: 0.06em;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+
+  .header-btn {
+    min-height: 40px;
+    padding: 8px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: #284862;
+    background: #f4f8fd;
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .header-btn:hover:not(:disabled) { border-color: #8fb8e0; background: #eaf3fd; }
+  .header-btn:active:not(:disabled) { background: #dfecfa; }
+  .header-btn:disabled { opacity: 0.5; cursor: wait; }
+
+  .header-btn:focus-visible {
+    outline: 3px solid #1c8cf0;
+    outline-offset: 2px;
+  }
+
+  .notice {
+    padding: 10px 24px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    color: #6d5200;
+    background: #fff8e6;
+    border-bottom: 1px solid #f0e0b0;
+  }
+
+  .notice.is-success {
+    color: #1e6b3a;
+    background: #e9f7ef;
+    border-bottom-color: #c4e6d2;
+  }
+
+  .notice.is-error {
+    color: #8c1d18;
+    background: #fdecea;
+    border-bottom-color: #f5c6c2;
+  }
+
+  /* ---------- レイアウト（左→右の流れ） ---------- */
+  .layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(180px, 14vw) minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: clamp(12px, 1.2vw, 22px);
+    padding: clamp(14px, 1.4vw, 24px);
+  }
+
+  /* ---------- 言語選択 ---------- */
+  .languages {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .lang-btn {
+    flex: 1 1 0;
+    min-height: 56px;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    font-family: inherit;
+    font-size: clamp(17px, 1.25vw, 23px);
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--panel);
+    border: 2px solid var(--line);
+    border-radius: 16px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+    text-align: left;
+    line-height: 1.25;
+  }
+
+  .lang-btn:hover { border-color: #8fb8e0; background: #f4f9ff; }
+  .lang-btn:active { transform: scale(0.985); }
+
+  .lang-btn[aria-pressed="true"] {
+    color: #fff;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+    border-color: var(--accent-dark);
+    box-shadow: 0 6px 16px rgb(11 107 203 / 0.28);
+  }
+
+  .lang-btn:focus-visible,
+  .translate-btn:focus-visible,
+  textarea:focus-visible {
+    outline: 3px solid #1c8cf0;
+    outline-offset: 2px;
+  }
+
+  /* ---------- 入力・出力パネル ---------- */
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    padding: clamp(14px, 1.2vw, 22px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: 0 2px 10px rgb(19 43 66 / 0.04);
+  }
+
+  .pane h2 {
+    margin: 0 0 10px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    text-transform: uppercase;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .pane h2 .hint {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: #90a3b5;
+    text-transform: none;
+  }
+
+  textarea {
+    flex: 1;
+    width: 100%;
+    min-height: 240px;
+    padding: 16px 18px;
+    font-family: inherit;
+    font-size: clamp(20px, 1.55vw, 27px);
+    line-height: 1.55;
+    color: var(--ink);
+    background: #fbfdff;
+    border: 2px solid var(--line);
+    border-radius: 14px;
+    resize: none;
+    caret-color: var(--accent);
+  }
+
+  textarea::placeholder { color: #9aabbb; }
+
+  .result {
+    flex: 1;
+    min-height: 240px;
+    overflow-y: auto;
+    padding: 16px 18px;
+    font-size: clamp(22px, 1.85vw, 32px);
+    line-height: 1.75;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #f7fbff;
+    border: 2px solid #e2ecf6;
+    border-radius: 14px;
+  }
+
+  .result.is-empty { color: #9aabbb; }
+  .result.is-error { color: var(--error); font-size: clamp(18px, 1.2vw, 22px); }
+
+  .result.is-loading { color: var(--muted); }
+
+  .result.is-loading::after {
+    content: "";
+    display: inline-block;
+    width: 0.9em;
+    height: 0.9em;
+    margin-left: 0.4em;
+    vertical-align: -0.1em;
+    border: 3px solid #c6d6e6;
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .pane-foot {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #90a3b5;
+    letter-spacing: 0.03em;
+  }
+
+  /* ---------- 翻訳ボタン ---------- */
+  .action {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .translate-btn {
+    width: clamp(84px, 7vw, 112px);
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+    font-family: inherit;
+    font-size: clamp(38px, 3vw, 48px);
+    line-height: 1;
+    color: #fff;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 10px 24px rgb(11 107 203 / 0.32);
+    transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
+  }
+
+  .translate-btn:hover:not(:disabled) { transform: translateY(-1px) scale(1.03); }
+  .translate-btn:active:not(:disabled) { transform: scale(0.97); }
+  .translate-btn:disabled { opacity: 0.55; cursor: wait; }
+
+  .action-label {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-align: center;
+  }
+
+  /* ---------- タブレット・スマートフォン ---------- */
+  @media (max-width: 900px) {
+    body { height: auto; }
+
+    .app-header { padding: 10px 16px; flex-wrap: wrap; row-gap: 8px; }
+    .brand { gap: 8px; }
+    .header-btn { min-height: 36px; padding: 6px 12px; font-size: 13px; }
+    .notice { padding: 8px 16px; font-size: 13px; }
+
+    .layout {
+      grid-template-columns: 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .languages {
+      flex-direction: row;
+      overflow-x: auto;
+      gap: 8px;
+      padding-bottom: 4px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .lang-btn {
+      flex: 0 0 auto;
+      min-height: 52px;
+      padding: 10px 18px;
+      font-size: 18px;
+      border-radius: 14px;
+      white-space: nowrap;
+    }
+
+    .action { padding: 2px 0; }
+
+    .translate-btn {
+      width: 84px;
+      font-size: 38px;
+      transform: rotate(90deg);
+    }
+
+    .translate-btn:hover:not(:disabled) { transform: rotate(90deg) scale(1.03); }
+    .translate-btn:active:not(:disabled) { transform: rotate(90deg) scale(0.97); }
+
+    .action-label { display: none; }
+
+    textarea { min-height: 170px; }
+    .result { min-height: 200px; }
+  }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>受付翻訳</h1>
+      <span class="sub">RECEPTION TRANSLATION</span>
+      <span class="version">v.0.1.0</span>
+    </div>
+    <div class="header-actions">
+      <button id="update" class="header-btn" type="button">アップデート</button>
+      <button id="restart" class="header-btn" type="button">再起動</button>
+    </div>
+  </header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+  <main class="layout">
+    <nav class="languages" id="languages" aria-label="言語選択 / Language selection"></nav>
+
+    <section class="pane">
+      <h2>原文 <span class="hint">Guest</span></h2>
+      <textarea
+        id="source"
+        maxlength="2000"
+        autocomplete="off"
+        autocorrect="off"
+        spellcheck="false"
+        placeholder="Please enter here / ここに入力してください"></textarea>
+      <p class="pane-foot">Ctrl + Enter でも翻訳できます</p>
+    </section>
+
+    <div class="action">
+      <button id="translate" class="translate-btn" type="button" aria-label="翻訳する">&#10132;</button>
+      <span class="action-label">TRANSLATE</span>
+    </div>
+
+    <section class="pane">
+      <h2>日本語訳 <span class="hint">Staff</span></h2>
+      <div id="result" class="result is-empty" role="status" aria-live="polite"></div>
+    </section>
+  </main>
+
+<script>
+  "use strict";
+
+  const EMPTY_MESSAGE = "翻訳結果がここに表示されます";
+  const EMPTY_INPUT_MESSAGE = "原文を入力してください。";
+
+  const languageNav = document.getElementById("languages");
+  const source = document.getElementById("source");
+  const result = document.getElementById("result");
+  const translateButton = document.getElementById("translate");
+
+  let selectedLanguage = null;
+  let loading = false;
+
+  function setResult(text, state) {
+    result.textContent = text;
+    result.className = "result";
+    if (state) result.classList.add(state);
+  }
+
+  function selectLanguage(code) {
+    selectedLanguage = code;
+    for (const button of languageNav.querySelectorAll(".lang-btn")) {
+      button.setAttribute("aria-pressed", String(button.dataset.code === code));
+    }
+    source.focus();
+  }
+
+  function renderLanguages(languages) {
+    languageNav.replaceChildren();
+    for (const language of languages) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "lang-btn";
+      button.dataset.code = language.code;
+      if (language.html_lang) button.lang = language.html_lang;
+      button.textContent = language.label;
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", () => selectLanguage(language.code));
+      languageNav.append(button);
+    }
+    selectLanguage(languages[0].code);
+  }
+
+  async function loadLanguages() {
+    try {
+      const response = await fetch("/api/languages");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      renderLanguages(await response.json());
+    } catch (error) {
+      console.error(error);
+      setResult("言語リストを読み込めませんでした。ページを再読み込みしてください。", "is-error");
+    }
+  }
+
+  async function translate() {
+    if (loading || !selectedLanguage) return;
+
+    const text = source.value.trim();
+    if (!text) {
+      setResult(EMPTY_INPUT_MESSAGE, "is-error");
+      source.focus();
+      return;
+    }
+
+    loading = true;
+    translateButton.disabled = true;
+    setResult("翻訳しています…", "is-loading");
+
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, language: selectedLanguage }),
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error((data && data.detail) || "翻訳に失敗しました（HTTP " + response.status + "）。");
+      }
+
+      setResult(data.translation);
+    } catch (error) {
+      console.error(error);
+      setResult(error.message || "通信エラーが発生しました。", "is-error");
+    } finally {
+      loading = false;
+      translateButton.disabled = false;
+    }
+  }
+
+  const updateButton = document.getElementById("update");
+  const restartButton = document.getElementById("restart");
+  const notice = document.getElementById("notice");
+
+  let maintenanceBusy = false;
+
+  function showNotice(text, kind) {
+    notice.textContent = text;
+    notice.className = "notice" + (kind ? " is-" + kind : "");
+    notice.hidden = false;
+  }
+
+  function setMaintenanceBusy(busy) {
+    maintenanceBusy = busy;
+    updateButton.disabled = busy;
+    restartButton.disabled = busy;
+  }
+
+  async function runUpdate() {
+    if (maintenanceBusy) return;
+    if (!window.confirm("GitHub から最新版を取得します。よろしいですか？")) return;
+
+    setMaintenanceBusy(true);
+    showNotice("アップデートを確認しています…");
+
+    try {
+      const response = await fetch("/api/update", { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error((data && data.detail) || "アップデートに失敗しました。");
+      }
+      if (data.changed) {
+        showNotice("最新版に更新しました。反映するには「再起動」を押してください。", "success");
+      } else {
+        showNotice("すでに最新版です。", "success");
+      }
+    } catch (error) {
+      console.error(error);
+      showNotice(error.message || "アップデートに失敗しました。", "error");
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function waitForRestart() {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      try {
+        const response = await fetch("/api/languages", { cache: "no-store" });
+        if (response.ok) return true;
+      } catch (error) {
+        // 再起動中は接続できないので、少し待って再試行する
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    return false;
+  }
+
+  async function runRestart() {
+    if (maintenanceBusy) return;
+    if (!window.confirm("受付翻訳サービスを再起動します。数秒間アクセスできなくなります。よろしいですか？")) return;
+
+    setMaintenanceBusy(true);
+    showNotice("再起動しています…");
+
+    try {
+      const response = await fetch("/api/restart", { method: "POST" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error((data && data.detail) || "再起動に失敗しました。");
+      }
+    } catch (error) {
+      console.error(error);
+      showNotice(error.message || "再起動に失敗しました。", "error");
+      setMaintenanceBusy(false);
+      return;
+    }
+
+    if (await waitForRestart()) {
+      location.reload();
+      return;
+    }
+
+    showNotice("再起動を確認できませんでした。手動で状態を確認してください。", "error");
+    setMaintenanceBusy(false);
+  }
+
+  updateButton.addEventListener("click", runUpdate);
+  restartButton.addEventListener("click", runRestart);
+
+  translateButton.addEventListener("click", translate);
+
+  source.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      translate();
+    }
+  });
+
+  setResult(EMPTY_MESSAGE, "is-empty");
+  loadLanguages();
+</script>
+</body>
+</html>
