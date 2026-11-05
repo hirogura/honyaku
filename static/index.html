@@ -273,7 +273,8 @@
   }
 
   .voice-btn,
-  .clear-btn {
+  .clear-btn,
+  .speak-btn {
     flex: 0 0 auto;
     min-height: 36px;
     padding: 6px 18px;
@@ -319,13 +320,44 @@
     animation: pulse 1s ease-in-out infinite;
   }
 
+  /* 読み上げボタンは行の右端に寄せる。 */
+  .speak-btn {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    color: #284862;
+    background: #f4f8fd;
+  }
+
+  .speak-btn svg { width: 18px; height: 18px; flex: 0 0 auto; }
+
+  .speak-btn:hover:not(:disabled) { border-color: #8fb8e0; background: #eaf3fd; }
+  .speak-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .speak-btn.is-active {
+    color: #fff;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+    border-color: var(--accent-dark);
+  }
+
+  .speak-btn.is-active:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+    border-color: var(--accent-dark);
+  }
+
+  .speak-btn.is-speaking svg { animation: speak-pulse 1s ease-in-out infinite; }
+
   .voice-btn:focus-visible,
-  .clear-btn:focus-visible {
+  .clear-btn:focus-visible,
+  .speak-btn:focus-visible {
     outline: 3px solid #1c8cf0;
     outline-offset: 2px;
   }
 
   @keyframes pulse { 50% { opacity: 0.25; } }
+  @keyframes speak-pulse { 50% { opacity: 0.25; } }
 
   /* ---------- 翻訳ボタン ---------- */
   .action {
@@ -448,7 +480,7 @@
     <div class="brand">
       <h1>受付翻訳</h1>
       <span class="sub">RECEPTION TRANSLATION</span>
-      <span class="version">v.0.7.0</span>
+      <span class="version">v.0.8.0</span>
     </div>
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
     <div class="header-actions">
@@ -497,6 +529,23 @@
         <button id="voice-result" class="voice-btn" type="button" aria-pressed="false">音声</button>
         <button id="clear-result" class="clear-btn" type="button">クリア</button>
         <span>Ctrl + Enter でも翻訳できます</span>
+        <button
+          id="speak-result"
+          class="speak-btn"
+          type="button"
+          aria-pressed="false"
+          title="翻訳結果を自動で読み上げる">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 9h3.5L12 5v14L7.5 15H4z" fill="currentColor" />
+            <path
+              d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round" />
+          </svg>
+          <span>読み上げ</span>
+        </button>
       </div>
     </section>
   </main>
@@ -596,12 +645,14 @@
     }
 
     setTranslating(true, translateButton);
+    stopSpeaking();
     showNotice("翻訳しています…");
 
     try {
       result.value = await requestTranslation("/api/translate", text);
       hideNotice();
       result.focus();
+      if (speakEnabled) speak(result.value.trim());
     } catch (error) {
       console.error(error);
       showNotice(error.message || "通信エラーが発生しました。", "error");
@@ -1071,6 +1122,112 @@
     () => "ja-JP",
   );
 
+  // ---------- 翻訳結果の読み上げ（Web Speech API） ----------
+  const speakButton = document.getElementById("speak-result");
+  const synthesizer = window.speechSynthesis;
+  let speakEnabled = false;
+  let speakToken = 0;
+
+  function pickJapaneseVoice() {
+    if (!synthesizer) return null;
+    const voices = synthesizer.getVoices();
+    return (
+      voices.find((voice) => voice.lang === "ja-JP") ||
+      voices.find((voice) => (voice.lang || "").toLowerCase().startsWith("ja")) ||
+      null
+    );
+  }
+
+  // Chrome は 1 回の発話が長すぎると途中で切れるため、文単位でおよそ 180 文字に分割する。
+  function splitForSpeech(text, limit = 180) {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    const sentences = normalized.match(/[^。．.!?！？]+[。．.!?！？]*/g) || [];
+    const chunks = [];
+    let current = "";
+
+    for (const sentence of sentences) {
+      if (sentence.length > limit) {
+        if (current) {
+          chunks.push(current);
+          current = "";
+        }
+        for (let index = 0; index < sentence.length; index += limit) {
+          chunks.push(sentence.slice(index, index + limit));
+        }
+        continue;
+      }
+      if (current.length + sentence.length > limit) {
+        chunks.push(current);
+        current = "";
+      }
+      current += sentence;
+    }
+
+    if (current) chunks.push(current);
+    return chunks.map((chunk) => chunk.trim()).filter(Boolean);
+  }
+
+  function setSpeaking(value) {
+    speakButton.classList.toggle("is-speaking", value);
+  }
+
+  function stopSpeaking() {
+    speakToken += 1;
+    if (synthesizer) synthesizer.cancel();
+    setSpeaking(false);
+  }
+
+  function speak(text) {
+    if (!synthesizer) return;
+    stopSpeaking();
+
+    const chunks = splitForSpeech(text);
+    if (!chunks.length) return;
+
+    const token = speakToken;
+    const voice = pickJapaneseVoice();
+
+    // Chrome では cancel() の直後に speak() すると無視されることがあるため、次のタスクで開始する。
+    setTimeout(() => {
+      if (token !== speakToken) return;
+
+      chunks.forEach((chunk, index) => {
+        const utterance = new SpeechSynthesisUtterance(chunk);
+        utterance.lang = "ja-JP";
+        if (voice) utterance.voice = voice;
+
+        if (index === chunks.length - 1) {
+          const finish = () => {
+            if (token === speakToken) setSpeaking(false);
+          };
+          utterance.addEventListener("end", finish);
+          utterance.addEventListener("error", finish);
+        }
+
+        synthesizer.speak(utterance);
+      });
+
+      setSpeaking(true);
+    }, 0);
+  }
+
+  if (!synthesizer) {
+    speakButton.disabled = true;
+    speakButton.title = "このブラウザは読み上げに対応していません（Chrome / Safari をお使いください）";
+  } else {
+    speakButton.addEventListener("click", () => {
+      speakEnabled = !speakEnabled;
+      speakButton.setAttribute("aria-pressed", String(speakEnabled));
+      speakButton.classList.toggle("is-active", speakEnabled);
+      speakButton.title = speakEnabled
+        ? "翻訳結果を自動で読み上げます（もう一度押すと停止）"
+        : "翻訳結果を自動で読み上げる";
+
+      if (speakEnabled) speak(result.value.trim());
+      else stopSpeaking();
+    });
+  }
+
   function clearInput(voice, textarea) {
     if (voice) {
       voice.clear();
@@ -1081,7 +1238,10 @@
   }
 
   document.getElementById("clear-source").addEventListener("click", () => clearInput(sourceVoice, source));
-  document.getElementById("clear-result").addEventListener("click", () => clearInput(resultVoice, result));
+  document.getElementById("clear-result").addEventListener("click", () => {
+    stopSpeaking();
+    clearInput(resultVoice, result);
+  });
 
   syncHeaderButtons();
   loadLanguages();
